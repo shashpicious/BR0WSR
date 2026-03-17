@@ -78,6 +78,7 @@
       display: flex;
       flex: 1;
       overflow: hidden;
+      position: relative;
     }
 
     /* ── SIDEBAR ── */
@@ -88,15 +89,51 @@
       display: flex;
       flex-direction: column;
       flex-shrink: 0;
+      transition: transform 0.2s ease, opacity 0.2s ease;
     }
 
+    /* unpinned: sidebar floats over content */
+    #sidebar.unpinned {
+      position: absolute;
+      top: 0; left: 0; bottom: 0;
+      z-index: 100;
+      transform: translateX(-221px);
+      opacity: 0;
+      pointer-events: none;
+    }
+    #sidebar.unpinned.open {
+      transform: translateX(0);
+      opacity: 1;
+      pointer-events: all;
+    }
+
+    /* ── SIDEBAR HEADER ── */
     #sidebar-header {
       padding: 10px 10px 6px;
       font-size: 9px;
       color: var(--green3);
       letter-spacing: 0.15em;
       border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
     }
+
+    /* ── PIN BUTTON ── */
+    #pin-btn {
+      background: none;
+      border: none;
+      padding: 2px;
+      cursor: pointer;
+      color: var(--green3);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: color 0.1s, filter 0.1s;
+      flex-shrink: 0;
+    }
+    #pin-btn:hover { color: var(--green); filter: drop-shadow(0 0 4px #00ff4166); }
+    #pin-btn.pinned { color: var(--green); filter: drop-shadow(0 0 4px #00ff4166); }
 
     #tabs { flex: 1; overflow-y: auto; padding: 6px 0; }
     #tabs::-webkit-scrollbar { width: 3px; }
@@ -360,7 +397,21 @@
 
 <div id="main">
   <div id="sidebar">
-    <div id="sidebar-header">// SESSIONS</div>
+    <div id="sidebar-header">
+      <span>// SESSIONS</span>
+      <button id="pin-btn" title="pin sidebar">
+        <!-- hollow pin (unpinned) -->
+        <svg id="pin-icon-unpinned" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="12" y1="17" x2="12" y2="22"/>
+          <path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"/>
+        </svg>
+        <!-- filled pin (pinned) -->
+        <svg id="pin-icon-pinned" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none">
+          <line x1="12" y1="17" x2="12" y2="22"/>
+          <path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"/>
+        </svg>
+      </button>
+    </div>
     <div id="tabs"></div>
     <div id="sidebar-footer">
       <button id="new-tab-btn">+ new_session</button>
@@ -545,6 +596,72 @@
   // ── Init ─────────────────────────────────────────────────────
   openNewTab()
   setTimeout(() => homeInput.focus(), 100)
+
+  // ── Sidebar pin / hover ──────────────────────────────────────
+  const sidebar          = document.getElementById('sidebar')
+  const pinBtn           = document.getElementById('pin-btn')
+  const pinIconUnpinned  = document.getElementById('pin-icon-unpinned')
+  const pinIconPinned    = document.getElementById('pin-icon-pinned')
+  const mainEl           = document.getElementById('main')
+
+  const EDGE_THRESHOLD = 8    // px from left edge to trigger open
+  const CLOSE_BUFFER   = 40  // px — how far past sidebar right edge before closing
+
+  let pinned = localStorage.getItem('sidebar-pinned') === 'true'
+  let hoverCloseTimer = null
+
+  function applyPinState() {
+    if (pinned) {
+      sidebar.classList.remove('unpinned', 'open')
+      pinBtn.classList.add('pinned')
+      pinIconUnpinned.style.display = 'none'
+      pinIconPinned.style.display   = 'block'
+    } else {
+      sidebar.classList.add('unpinned')
+      pinBtn.classList.remove('pinned')
+      pinIconUnpinned.style.display = 'block'
+      pinIconPinned.style.display   = 'none'
+    }
+  }
+
+  function openSidebar()  { if (!pinned) sidebar.classList.add('open') }
+  function closeSidebar() { if (!pinned) sidebar.classList.remove('open') }
+
+  pinBtn.addEventListener('click', () => {
+    pinned = !pinned
+    localStorage.setItem('sidebar-pinned', pinned)
+    applyPinState()
+  })
+
+  // open when cursor is within EDGE_THRESHOLD px of the left edge
+  mainEl.addEventListener('mousemove', e => {
+    if (pinned) return
+    const rect = mainEl.getBoundingClientRect()
+    if (e.clientX - rect.left <= EDGE_THRESHOLD) {
+      clearTimeout(hoverCloseTimer)
+      openSidebar()
+    }
+  })
+
+  // close when cursor moves beyond sidebar width + buffer
+  mainEl.addEventListener('mousemove', e => {
+    if (pinned || !sidebar.classList.contains('open')) return
+    const rect = mainEl.getBoundingClientRect()
+    if (e.clientX - rect.left > sidebar.offsetWidth + CLOSE_BUFFER) {
+      clearTimeout(hoverCloseTimer)
+      hoverCloseTimer = setTimeout(closeSidebar, 100)
+    } else {
+      clearTimeout(hoverCloseTimer)
+    }
+  })
+
+  // also close when cursor leaves the main area entirely
+  mainEl.addEventListener('mouseleave', () => {
+    if (pinned) return
+    hoverCloseTimer = setTimeout(closeSidebar, 150)
+  })
+
+  applyPinState()
 
   // ── VPN ──────────────────────────────────────────────────────
   const vpnDot        = document.getElementById('vpn-dot')
