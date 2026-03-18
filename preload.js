@@ -11,5 +11,8 @@ contextBridge.exposeInMainWorld('browser', {
     status:     ()     => ipcRenderer.invoke('vpn-status'),
     connect:    (code) => ipcRenderer.invoke('vpn-connect', code),
     disconnect: ()     => ipcRenderer.invoke('vpn-disconnect'),
+  },
+  screenshot: {
+    capture: (tabId) => ipcRenderer.invoke('screenshot-capture', tabId),
   }
 })

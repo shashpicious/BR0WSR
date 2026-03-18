@@ -83,4 +83,9 @@ app.whenReady().then(() => {
   }).catch(err => console.error('[blocker] error:', err))
 })
 
+ipcMain.handle('screenshot-capture', async () => {
+  const image = await win.webContents.capturePage()
+  return image.toDataURL()
+})
+
 app.on('window-all-closed', () => app.quit())

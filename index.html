@@ -380,9 +380,51 @@
       96%  { opacity: 1; }
       100% { top: 100%; opacity: 0; }
     }
+
+    /* ── SCREENSHOT OVERLAY ── */
+    #screenshot-overlay {
+      position: fixed; inset: 0; z-index: 99998;
+      cursor: crosshair;
+      display: none;
+    }
+    #screenshot-overlay.active { display: block; }
+
+    #screenshot-overlay canvas {
+      position: absolute; inset: 0;
+      width: 100%; height: 100%;
+    }
+
+    #screenshot-selection {
+      position: absolute;
+      border: 1px solid var(--green);
+      box-shadow: var(--glow-hi), inset 0 0 0 1px #00ff4122;
+      background: rgba(0,255,65,0.06);
+      pointer-events: none;
+      display: none;
+    }
+
+    #screenshot-hint {
+      position: fixed;
+      bottom: 18px; left: 50%;
+      transform: translateX(-50%);
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--green3);
+      letter-spacing: 0.15em;
+      pointer-events: none;
+      z-index: 99999;
+      display: none;
+    }
+    #screenshot-overlay.active ~ #screenshot-hint { display: block; }
   </style>
 </head>
 <body>
+
+<div id="screenshot-overlay">
+  <canvas id="screenshot-canvas"></canvas>
+  <div id="screenshot-selection"></div>
+</div>
+<div id="screenshot-hint">[ drag to select region ] &nbsp;&nbsp; [ ESC ] cancel</div>
 
 <!-- ── LOCK SCREEN ── -->
 <div id="lock-screen">
@@ -756,6 +798,139 @@
 
   vpnInit()
   setInterval(vpnPollStatus, 4000)
+
+  // ── SCREENSHOT TO SEARCH ─────────────────────────────────────
+  const screenshotOverlay   = document.getElementById('screenshot-overlay')
+  const screenshotSelection = document.getElementById('screenshot-selection')
+  const screenshotCanvas    = document.getElementById('screenshot-canvas')
+  const ctx                 = screenshotCanvas.getContext('2d')
+
+  let ssActive = false, ssStart = null, ssImg = null
+
+  async function startScreenshot() {
+    if (ssActive) return
+    const dataURL = await window.browser.screenshot.capture()
+    const img = new Image()
+    img.onload = () => {
+      ssImg = img
+      screenshotCanvas.width  = window.innerWidth
+      screenshotCanvas.height = window.innerHeight
+      // draw dimmed version
+      ctx.drawImage(img, 0, 0, screenshotCanvas.width, screenshotCanvas.height)
+      ctx.fillStyle = 'rgba(0,0,0,0.55)'
+      ctx.fillRect(0, 0, screenshotCanvas.width, screenshotCanvas.height)
+      ssActive = true
+      screenshotOverlay.classList.add('active')
+    }
+    img.src = dataURL
+  }
+
+  function ssGetPos(e) {
+    return { x: e.clientX, y: e.clientY }
+  }
+
+  screenshotOverlay.addEventListener('mousedown', e => {
+    ssStart = ssGetPos(e)
+    screenshotSelection.style.display = 'block'
+    screenshotSelection.style.left   = ssStart.x + 'px'
+    screenshotSelection.style.top    = ssStart.y + 'px'
+    screenshotSelection.style.width  = '0px'
+    screenshotSelection.style.height = '0px'
+  })
+
+  screenshotOverlay.addEventListener('mousemove', e => {
+    if (!ssStart) return
+    const pos = ssGetPos(e)
+    const x = Math.min(pos.x, ssStart.x)
+    const y = Math.min(pos.y, ssStart.y)
+    const w = Math.abs(pos.x - ssStart.x)
+    const h = Math.abs(pos.y - ssStart.y)
+    screenshotSelection.style.left   = x + 'px'
+    screenshotSelection.style.top    = y + 'px'
+    screenshotSelection.style.width  = w + 'px'
+    screenshotSelection.style.height = h + 'px'
+    // redraw with bright region
+    ctx.drawImage(ssImg, 0, 0, screenshotCanvas.width, screenshotCanvas.height)
+    ctx.fillStyle = 'rgba(0,0,0,0.55)'
+    ctx.fillRect(0, 0, screenshotCanvas.width, screenshotCanvas.height)
+    ctx.drawImage(ssImg, x, y, w, h, x, y, w, h)
+  })
+
+  screenshotOverlay.addEventListener('mouseup', e => {
+    if (!ssStart) return
+    const pos = ssGetPos(e)
+    const x = Math.min(pos.x, ssStart.x)
+    const y = Math.min(pos.y, ssStart.y)
+    const w = Math.abs(pos.x - ssStart.x)
+    const h = Math.abs(pos.y - ssStart.y)
+    ssStart = null
+    const imgSnapshot = ssImg   // grab before cancel clears state
+    cancelScreenshot()
+    if (w < 10 || h < 10) return
+
+    // crop the region from the full screenshot
+    const dpr = window.devicePixelRatio || 1
+    const crop = document.createElement('canvas')
+    crop.width  = w * dpr
+    crop.height = h * dpr
+    const cctx = crop.getContext('2d')
+    cctx.drawImage(imgSnapshot,
+      x * dpr, y * dpr, w * dpr, h * dpr,
+      0, 0, w * dpr, h * dpr
+    )
+
+    crop.toBlob(async blob => {
+      // Convert to base64 and open Google Lens image search via clipboard trick
+      const reader = new FileReader()
+      reader.onload = () => {
+        const dataURL = reader.result
+        // Open a new tab that auto-submits to Google Lens
+        const id = createTab()
+        switchTab(id)
+        const meta = tabMeta[id]
+        meta.url = 'about:blank'
+        meta.wvWrap.classList.add('active')
+        homeEl.classList.add('hidden')
+
+        // Build a self-submitting form page that posts the image to Google Lens
+        const html = `<!DOCTYPE html><html><body>
+          <form id="f" action="https://lens.google.com/upload" method="POST" enctype="multipart/form-data">
+            <input type="hidden" name="ep" value="ccm">
+            <input type="hidden" name="s" value="csp">
+            <input id="fi" type="file" name="encoded_image" style="display:none">
+          </form>
+          <script>
+            fetch('${dataURL}').then(r=>r.blob()).then(b=>{
+              const f=new File([b],'crop.png',{type:'image/png'})
+              const dt=new DataTransfer(); dt.items.add(f)
+              document.getElementById('fi').files=dt.files
+              document.getElementById('f').submit()
+            })
+          <\/script>
+        </body></html>`
+
+        meta.wv.src = 'data:text/html;charset=utf-8,' + encodeURIComponent(html)
+        renderTabs()
+      }
+      reader.readAsDataURL(blob)
+    }, 'image/png')
+  })
+
+  document.addEventListener('keydown', e => {
+    if (ssActive && e.key === 'Escape') cancelScreenshot()
+    if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'S' || e.key === 's')) {
+      e.preventDefault()
+      e.stopImmediatePropagation()
+      startScreenshot()
+    }
+  })
+
+  function cancelScreenshot() {
+    ssActive = false
+    ssStart  = null
+    screenshotOverlay.classList.remove('active')
+    screenshotSelection.style.display = 'none'
+  }
 
   // ── LOCK SCREEN ──────────────────────────────────────────────
   const lockScreen   = document.getElementById('lock-screen')
